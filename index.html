@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GUTTER</title>
+    <style>
+        @font-face {
+            font-family: 'GutterFont';
+            src: url('DEMED___.TTF') format('truetype');
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="c"></canvas>
+    <script>
+        const canvas = document.getElementById('c');
+        const ctx = canvas.getContext('2d');
+        let W, H;
+        function resize() { W = canvas.width = innerWidth; H = canvas.height = innerHeight; }
+        resize();
+
+        const BG_COUNT = 30000;
+        const TXT_COUNT = 18000;
+        const SENSE_SCALE = 4;
+        const SENSOR_DIST = 18;
+        const SENSOR_ANGLE = 0.45;
+        const ROT_ANGLE = 0.3;
+        const BG_SPEED = 1.1;
+        const TXT_SPEED = 1.2;
+        const DECAY_ALPHA = 0.035;
+        const FORMATION_FR = 1800;
+        const FORMATION_FADE = 600;
+        const ATT_STRONG = 14.0;
+        const ATT_WEAK = 2.5;
+        const TXT_DELAY = 90;
+        const MOUSE_RADIUS = 120;
+        const MOUSE_FORCE = 2.5;
+
+        let trail, tCtx;
+        let sense, sCtx;
+        let sW, sH, senseData;
+
+        function createBuffers() {
+            trail = document.createElement('canvas');
+            trail.width = W; trail.height = H;
+            tCtx = trail.getContext('2d');
+            tCtx.fillStyle = '#000';
+            tCtx.fillRect(0, 0, W, H);
+
+            sW = (W / SENSE_SCALE) | 0;
+            sH = (H / SENSE_SCALE) | 0;
+            sense = document.createElement('canvas');
+            sense.width = sW; sense.height = sH;
+            sCtx = sense.getContext('2d', { willReadFrequently: true });
+        }
+
+        let attractorMap;
+
+        function buildAttractor() {
+            const off = document.createElement('canvas');
+            off.width = W; off.height = H;
+            const ox = off.getContext('2d');
+            const fs = Math.floor(Math.min(H * 0.30, W * 0.275));
+            ox.fillStyle = '#fff';
+            ox.font = fs + 'px GutterFont';
+            ox.textAlign = 'center';
+            ox.textBaseline = 'middle';
+            ox.fillText('GUTTER', W / 2, H / 2);
+
+            const raw = ox.getImageData(0, 0, W, H).data;
+            attractorMap = new Uint8Array(W * H);
+            const pts = [];
+            for (let i = 0; i < W * H; i++) {
+                if (raw[i * 4] > 128) {
+                    attractorMap[i] = 1;
+                    pts.push(i % W, (i / W) | 0);
+                }
+            }
+            return pts;
+        }
+
+        let bgX, bgY, bgA;
+        let txX, txY, txA;
+
+        function spawnAgents(textPts) {
+            const nPts = textPts.length / 2;
+
+            bgX = new Float32Array(BG_COUNT);
+            bgY = new Float32Array(BG_COUNT);
+            bgA = new Float32Array(BG_COUNT);
+            for (let i = 0; i < BG_COUNT; i++) {
+                bgX[i] = Math.random() * W;
+                bgY[i] = Math.random() * H;
+                bgA[i] = Math.random() * 6.2832;
+            }
+
+            txX = new Float32Array(TXT_COUNT);
+            txY = new Float32Array(TXT_COUNT);
+            txA = new Float32Array(TXT_COUNT);
+            for (let i = 0; i < TXT_COUNT; i++) {
+                if (nPts > 0) {
+                    const pi = (Math.random() * nPts) | 0;
+                    txX[i] = textPts[pi * 2] + (Math.random() - 0.5) * 6;
+                    txY[i] = textPts[pi * 2 + 1] + (Math.random() - 0.5) * 6;
+                } else {
+                    txX[i] = W * 0.5 + (Math.random() - 0.5) * 300;
+                    txY[i] = H * 0.5 + (Math.random() - 0.5) * 150;
+                }
+                txA[i] = Math.random() * 6.2832;
+            }
+        }
+
+        function updateSenseData() {
+            sCtx.drawImage(trail, 0, 0, sW, sH);
+            senseData = sCtx.getImageData(0, 0, sW, sH).data;
+        }
+
+        function senseTrail(x, y) {
+            const sx = (x / SENSE_SCALE) | 0;
+            const sy = (y / SENSE_SCALE) | 0;
+            if (sx < 0 || sx >= sW || sy < 0 || sy >= sH) return 0;
+            const i = (sy * sW + sx) * 4;
+            return senseData[i] + senseData[i + 1] + senseData[i + 2];
+        }
+
+        function senseDir(x, y, a, d) {
+            return senseTrail(x + Math.cos(a) * d, y + Math.sin(a) * d);
+        }
+
+        function senseAtt(x, y, a, d) {
+            const ax = (x + Math.cos(a) * d) | 0;
+            const ay = (y + Math.sin(a) * d) | 0;
+            if (ax < 0 || ax >= W || ay < 0 || ay >= H) return 0;
+            return attractorMap[ay * W + ax] * 255;
+        }
+
+        let mouseX = -9999, mouseY = -9999;
+        let mouseActive = false;
+
+        function onPointer(e) {
+            const t = e.touches ? e.touches[0] : e;
+            mouseX = t.clientX; mouseY = t.clientY;
+            mouseActive = true;
+        }
+        function onPointerEnd() { mouseActive = false; mouseX = -9999; mouseY = -9999; }
+
+        canvas.addEventListener('mousemove', onPointer);
+        canvas.addEventListener('touchmove', e => { e.preventDefault(); onPointer(e); }, { passive: false });
+        canvas.addEventListener('touchstart', e => { e.preventDefault(); onPointer(e); }, { passive: false });
+        canvas.addEventListener('mouseleave', onPointerEnd);
+        canvas.addEventListener('touchend', onPointerEnd);
+
+        let frame = 0;
+
+        function step() {
+            frame++;
+            const time = frame * 0.008;
+            const pulse = 1.0 + Math.sin(time) * 0.08;
+
+            const bgSpd = BG_SPEED * pulse;
+            for (let i = 0; i < BG_COUNT; i++) {
+                let x = bgX[i], y = bgY[i], a = bgA[i];
+
+                const f = senseDir(x, y, a, SENSOR_DIST);
+                const l = senseDir(x, y, a - SENSOR_ANGLE, SENSOR_DIST);
+                const r = senseDir(x, y, a + SENSOR_ANGLE, SENSOR_DIST);
+
+                if (f > l && f > r) {
+                    a += (Math.random() - 0.5) * 0.05;
+                } else if (l > r) {
+                    a -= ROT_ANGLE;
+                } else if (r > l) {
+                    a += ROT_ANGLE;
+                } else {
+                    a += (Math.random() > 0.5 ? 1 : -1) * ROT_ANGLE;
+                }
+
+                x += Math.cos(a) * bgSpd;
+                y += Math.sin(a) * bgSpd;
+
+                if (mouseActive) {
+                    const dx = x - mouseX, dy = y - mouseY;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < MOUSE_RADIUS && dist > 1) {
+                        const force = (1 - dist / MOUSE_RADIUS) * MOUSE_FORCE;
+                        x += (dx / dist) * force;
+                        y += (dy / dist) * force;
+                        a += (Math.random() - 0.5) * 0.4;
+                    }
+                }
+
+                if (x < 0) x += W; if (x >= W) x -= W;
+                if (y < 0) y += H; if (y >= H) y -= H;
+
+                bgX[i] = x; bgY[i] = y; bgA[i] = a;
+            }
+
+            if (frame < TXT_DELAY) { return; }
+
+            const enforceBoundary = frame < FORMATION_FR;
+            const releaseProb = enforceBoundary
+                ? 0
+                : Math.min((frame - FORMATION_FR) / FORMATION_FADE, 1);
+
+            const attW = enforceBoundary
+                ? ATT_STRONG
+                : ATT_STRONG + (ATT_WEAK - ATT_STRONG) * releaseProb;
+            const txSpd = TXT_SPEED * pulse;
+
+            for (let i = 0; i < TXT_COUNT; i++) {
+                let x = txX[i], y = txY[i], a = txA[i];
+
+                const ft = senseDir(x, y, a, SENSOR_DIST) * 0.7 +
+                    senseAtt(x, y, a, SENSOR_DIST) * attW;
+                const lt = senseDir(x, y, a - SENSOR_ANGLE, SENSOR_DIST) * 0.7 +
+                    senseAtt(x, y, a - SENSOR_ANGLE, SENSOR_DIST) * attW;
+                const rt = senseDir(x, y, a + SENSOR_ANGLE, SENSOR_DIST) * 0.7 +
+                    senseAtt(x, y, a + SENSOR_ANGLE, SENSOR_DIST) * attW;
+
+                if (ft > lt && ft > rt) {
+                    a += (Math.random() - 0.5) * 0.04;
+                } else if (lt > rt) {
+                    a -= ROT_ANGLE;
+                } else if (rt > lt) {
+                    a += ROT_ANGLE;
+                } else {
+                    a += (Math.random() > 0.5 ? 1 : -1) * ROT_ANGLE;
+                }
+
+                const nx = x + Math.cos(a) * txSpd;
+                const ny = y + Math.sin(a) * txSpd;
+
+                const nix = nx | 0, niy = ny | 0;
+                const insideBound = nix >= 0 && nix < W && niy >= 0 && niy < H
+                    && attractorMap[niy * W + nix] === 1;
+
+                if (insideBound || !enforceBoundary || Math.random() < releaseProb) {
+                    x = nx; y = ny;
+                    if (x < 0) x += W; if (x >= W) x -= W;
+                    if (y < 0) y += H; if (y >= H) y -= H;
+                } else {
+                    a += Math.PI + (Math.random() - 0.5);
+                }
+
+                txX[i] = x; txY[i] = y; txA[i] = a;
+            }
+        }
+
+        function render() {
+            const time = frame * 0.008;
+
+            const da = DECAY_ALPHA + Math.sin(time * 0.5) * 0.005;
+            tCtx.fillStyle = `rgba(0,0,0,${da})`;
+            tCtx.fillRect(0, 0, W, H);
+
+            tCtx.fillStyle = 'rgba(140,18,12,0.65)';
+            tCtx.beginPath();
+            for (let i = 0; i < BG_COUNT; i++) {
+                tCtx.rect(bgX[i], bgY[i], 1.5, 1.5);
+            }
+            tCtx.fill();
+
+            tCtx.fillStyle = 'rgba(80,8,25,0.35)';
+            tCtx.beginPath();
+            for (let i = 0; i < BG_COUNT; i += 3) {
+                tCtx.rect(bgX[i] + 0.5, bgY[i] + 0.5, 1, 1);
+            }
+            tCtx.fill();
+
+            if (frame >= TXT_DELAY) {
+                tCtx.fillStyle = 'rgba(255,248,235,0.55)';
+                tCtx.beginPath();
+                for (let i = 0; i < TXT_COUNT; i++) {
+                    tCtx.rect(txX[i], txY[i], 1.5, 1.5);
+                }
+                tCtx.fill();
+            }
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, W, H);
+            ctx.drawImage(trail, 0, 0);
+
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            ctx.filter = 'blur(5px)';
+            ctx.globalAlpha = 0.35 + Math.sin(time * 0.7) * 0.08;
+            ctx.drawImage(trail, 0, 0);
+            ctx.restore();
+
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            ctx.filter = 'blur(16px)';
+            ctx.globalAlpha = 0.15;
+            ctx.drawImage(trail, 0, 0);
+            ctx.restore();
+        }
+
+        function loop() {
+            updateSenseData();
+            step();
+            render();
+            requestAnimationFrame(loop);
+        }
+
+        function init() {
+            createBuffers();
+            const textPts = buildAttractor();
+            spawnAgents(textPts);
+            frame = 0;
+            loop();
+        }
+
+        window.addEventListener('resize', () => { resize(); init(); });
+        document.fonts.load('48px GutterFont').then(() => init());
+    </script>
+</body>
+
+</html>
