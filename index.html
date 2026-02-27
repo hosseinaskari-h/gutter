@@ -25,11 +25,40 @@
         canvas {
             display: block;
         }
+
+        #enter-btn {
+            position: absolute;
+            top: 60%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            text-decoration: none;
+            font-size: 24px;
+            font-family: monospace;
+            letter-spacing: 4px;
+            padding: 12px 30px;
+            z-index: 10;
+            opacity: 0;
+            pointer-events: none;
+            /* until faded in */
+            transition: opacity 1.5s ease-in, color 0.3s;
+            mix-blend-mode: difference;
+        }
+
+        #enter-btn.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        #enter-btn:hover {
+            color: #ff3333;
+        }
     </style>
 </head>
 
 <body>
     <canvas id="c"></canvas>
+    <a id="enter-btn" href="enter.html">ENTER</a>
     <script>
         const canvas = document.getElementById('c');
         const ctx = canvas.getContext('2d');
@@ -168,10 +197,76 @@
         canvas.addEventListener('mouseleave', onPointerEnd);
         canvas.addEventListener('touchend', onPointerEnd);
 
+        const btn = document.getElementById('enter-btn');
+        let btnRect = { x: 0, y: 0, w: 0, h: 0, cx: 0, cy: 0 };
+
+        const r = btn.getBoundingClientRect();
+        btnRect = {
+            x: r.left, y: r.top,
+            w: r.width + 10,
+            h: r.height + 10,
+            cx: r.left + r.width / 2,
+            cy: r.top + r.height / 2
+        };
+
+        function applyButtonForce(x, y, a, frame) {
+            // 180 frames @ 60fps
+            if (frame < 180) return { x, y, a };
+
+
+            const growth = Math.min((frame - 180) / 120, 1.0); // full size at frame 300
+
+            const rw = (btnRect.w / 2) * growth;
+            const rh = (btnRect.h / 2) * growth;
+            const cx = btnRect.cx;
+            const cy = btnRect.cy;
+
+            const dx = Math.abs(x - cx);
+            const dy = Math.abs(y - cy);
+
+            if (dx < rw && dy < rh) {
+                const nx = x < cx ? cx - rw : cx + rw;
+                const ny = y < cy ? cy - rh : cy + rh;
+
+                if (rw - dx < rh - dy) {
+                    x = nx;
+                } else {
+                    y = ny;
+                }
+                a += Math.PI + (Math.random() - 0.5);
+                return { x, y, a };
+            }
+
+            if (frame > 300) {
+                const borderDistX = Math.abs(dx - rw);
+                const borderDistY = Math.abs(dy - rh);
+
+                if (dx < rw + 20 && dy < rh + 20) {
+                    if (borderDistX < borderDistY && borderDistX < 20 && dy < rh) {
+                        const targetX = x < cx ? cx - rw : cx + rw;
+                        x += (targetX - x) * 0.15;
+                        a = Math.PI / 2 * (y > cy ? -1 : 1) + (Math.random() - 0.5) * 0.2;
+                    } else if (borderDistY < 20 && dx < rw) {
+                        const targetY = y < cy ? cy - rh : cy + rh;
+                        y += (targetY - y) * 0.15;
+                        a = (x > cx ? Math.PI : 0) + (Math.random() - 0.5) * 0.2;
+                    }
+                }
+            }
+
+            return { x, y, a };
+        }
+
         let frame = 0;
 
         function step() {
             frame++;
+
+            // 300 frames @ 60fps = 5 secs
+            if (frame === 300) {
+                btn.classList.add('visible');
+            }
+
             const time = frame * 0.008;
             const pulse = 1.0 + Math.sin(time) * 0.08;
 
@@ -206,6 +301,9 @@
                         a += (Math.random() - 0.5) * 0.4;
                     }
                 }
+
+                const bF = applyButtonForce(x, y, a, frame);
+                x = bF.x; y = bF.y; a = bF.a;
 
                 if (x < 0) x += W; if (x >= W) x -= W;
                 if (y < 0) y += H; if (y >= H) y -= H;
@@ -254,6 +352,10 @@
 
                 if (insideBound || !enforceBoundary || Math.random() < releaseProb) {
                     x = nx; y = ny;
+
+                    const bF = applyButtonForce(x, y, a, frame);
+                    x = bF.x; y = bF.y; a = bF.a;
+
                     if (x < 0) x += W; if (x >= W) x -= W;
                     if (y < 0) y += H; if (y >= H) y -= H;
                 } else {
